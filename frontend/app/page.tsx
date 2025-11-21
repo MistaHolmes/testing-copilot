@@ -1,5 +1,32 @@
-'use client';
-import { useEffect, useState, useRef } from 'react';
+"use client";
+import { useEffect, useState, useRef } from "react";
+// Lazy-load Capacitor plugins at runtime so web builds don't fail when packages are not installed.
+let _capModules: any | null = null;
+async function loadCapacitorModules() {
+  if (_capModules !== null) return _capModules;
+  try {
+    // Dynamic imports — may not be present in web-only environments.
+    // @ts-ignore: allow optional import of Capacitor packages
+    const core = await import('@capacitor/core');
+    // @ts-ignore
+    const storage = await import('@capacitor/storage');
+    // @ts-ignore
+    const network = await import('@capacitor/network');
+    // @ts-ignore
+    const app = await import('@capacitor/app');
+    _capModules = {
+      Capacitor: core?.Capacitor ?? core,
+      Storage: storage?.Storage ?? storage,
+      Network: network?.Network ?? network,
+      App: app?.App ?? app,
+    };
+    return _capModules;
+  } catch (e) {
+    // Capacitor packages not available — run in web-only mode using fallbacks.
+    _capModules = null;
+    return null;
+  }
+}
 
 type FormState = { name: string; email: string; message: string };
 const QUEUE_KEY = 'offline_forms_queue';
@@ -28,9 +55,39 @@ async function postForm(base: string, form: FormState) {
   return json;
 }
 
-function readQueue(): FormState[] {
+// Helpers that use Capacitor Storage on native and localStorage as a web fallback.
+const isNative = () => {
   try {
-    const raw = localStorage.getItem(QUEUE_KEY);
+    // synchronous check not possible when modules are lazy — assume false
+    // use isNativeAsync for a reliable runtime check
+    return false;
+  } catch {
+    return false;
+  }
+};
+
+async function isNativeAsync(): Promise<boolean> {
+  try {
+    const mod = await loadCapacitorModules();
+    if (!mod || !mod.Capacitor) return false;
+    const p = mod.Capacitor.getPlatform();
+    return p === 'ios' || p === 'android';
+  } catch {
+    return false;
+  }
+}
+
+async function readQueueAsync(): Promise<FormState[]> {
+  try {
+    if (await isNativeAsync()) {
+      const mod = await loadCapacitorModules();
+      if (mod && mod.Storage) {
+        const r = await mod.Storage.get({ key: QUEUE_KEY });
+        if (!r?.value) return [];
+        return JSON.parse(r.value) as FormState[];
+      }
+    }
+    const raw = typeof window !== "undefined" ? localStorage.getItem(QUEUE_KEY) : null;
     if (!raw) return [];
     return JSON.parse(raw) as FormState[];
   } catch {
@@ -38,32 +95,59 @@ function readQueue(): FormState[] {
   }
 }
 
-function writeQueue(q: FormState[]) {
-  localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+async function writeQueueAsync(q: FormState[]) {
+  const s = JSON.stringify(q);
+  try {
+    if (await isNativeAsync()) {
+      const mod = await loadCapacitorModules();
+      if (mod && mod.Storage) {
+        await mod.Storage.set({ key: QUEUE_KEY, value: s });
+        return;
+      }
+    }
+    if (typeof window !== "undefined") localStorage.setItem(QUEUE_KEY, s);
+  } catch (e) {
+    console.error('writeQueueAsync error', e);
+  }
 }
 
 async function flushQueue(base: string) {
-  const queue = readQueue();
+  const queue = await readQueueAsync();
   if (!queue.length) return;
   const remaining: FormState[] = [];
   for (const [idx, item] of queue.entries()) {
     try {
       const data = await postForm(base, item);
-      console.log('flushed form created', { index: idx, data });
+      console.log("flushed form created", { index: idx, data });
     } catch (err) {
-      console.error('failed to flush queued item', { index: idx, err });
+      console.error("failed to flush queued item", { index: idx, err });
       remaining.push(item);
     }
   }
-  writeQueue(remaining);
+  await writeQueueAsync(remaining);
 
   // If there are still remaining items and we're online, retry after a short delay.
-  if (remaining.length && typeof window !== 'undefined' && navigator.onLine) {
+  const online = await isOnline();
+  if (remaining.length && online) {
     console.log(`retrying flush for ${remaining.length} remaining items in 5s`);
     setTimeout(() => {
-      flushQueue(base).catch((e) => console.error('retry flush error', e));
+      flushQueue(base).catch((e) => console.error("retry flush error", e));
     }, 5000);
   }
+}
+
+// Runtime online check using Capacitor Network plugin with navigator fallback
+async function isOnline(): Promise<boolean> {
+  try {
+    const mod = await loadCapacitorModules();
+    if (mod && mod.Network && typeof mod.Network.getStatus === 'function') {
+      const status = await mod.Network.getStatus();
+      return !!status.connected;
+    }
+  } catch (e) {
+    // ignore and fallback
+  }
+  return typeof window !== 'undefined' ? !!navigator.onLine : false;
 }
 
 export default function Page() {
@@ -71,42 +155,108 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [showStored, setShowStored] = useState(false);
   const [showOnline, setShowOnline] = useState(false);
-  const [queuedCount, setQueuedCount] = useState<number>(() => {
-    if (typeof window === 'undefined') return 0;
-    return readQueue().length;
-  });
+  const [queuedCount, setQueuedCount] = useState<number>(0);
   const base = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
   const initialOnlineRef = useRef(true);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === "undefined") return;
+
+    let removeListener: (() => void) | undefined;
 
     const handleOnline = async () => {
       try {
         await flushQueue(base);
-        setQueuedCount(readQueue().length);
+        setQueuedCount((await readQueueAsync()).length);
         if (!initialOnlineRef.current) {
           setShowOnline(true);
           setTimeout(() => setShowOnline(false), 3000);
         }
       } catch (e) {
-        console.error('flush error', e);
+        console.error("flush error", e);
       }
       initialOnlineRef.current = false;
     };
 
-    window.addEventListener('online', handleOnline);
+    // init listener using Capacitor Network if available, otherwise fallback to window
+    (async () => {
+      try {
+        const mod = await loadCapacitorModules();
+        if (mod && mod.Network && typeof mod.Network.addListener === 'function') {
+          const listener = await mod.Network.addListener("networkStatusChange", (status: any) => {
+            if (status.connected) handleOnline();
+          });
+          removeListener = () => listener.remove();
 
-    if (navigator.onLine) {
-      // initial mount and already online — flush silently without showing toast
-      handleOnline();
-    } else {
-      // start in offline mode: when the online event fires later, show the toast
-      initialOnlineRef.current = false;
-    }
+          // initial check using plugin
+          const status = await mod.Network.getStatus();
+          if (status.connected) {
+            // flush silently on mount
+            handleOnline();
+          } else {
+            initialOnlineRef.current = false;
+          }
+          return;
+        }
+      } catch (e) {
+        // fallthrough to fallback
+      }
 
-    return () => window.removeEventListener('online', handleOnline);
-  }, [base, initialOnlineRef]);
+      // Fallback if Network plugin not available
+      window.addEventListener("online", handleOnline);
+      removeListener = () => window.removeEventListener("online", handleOnline);
+      if (navigator.onLine) handleOnline();
+      else initialOnlineRef.current = false;
+    })();
+
+    return () => {
+      if (removeListener) removeListener();
+    };
+  }, [base]);
+
+  // set initial queued count on mount
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const q = await readQueueAsync();
+        if (mounted) setQueuedCount(q.length);
+      } catch (e) {
+        console.error('readQueueAsync error', e);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  // Flush queue when app comes to foreground (native App resume)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let removeAppListener: (() => void) | undefined;
+    (async () => {
+      try {
+        const mod = await loadCapacitorModules();
+        if (mod && mod.App && typeof mod.App.addListener === 'function') {
+          const listener = mod.App.addListener("appStateChange", async (state: any) => {
+            if (state.isActive) {
+              try {
+                await flushQueue(base);
+                setQueuedCount((await readQueueAsync()).length);
+              } catch (e) {
+                console.error("flush on resume error", e);
+              }
+            }
+          });
+          removeAppListener = () => listener.remove();
+        }
+      } catch (e) {
+        // App plugin not available — ignore
+      }
+    })();
+
+    return () => {
+      if (removeAppListener) removeAppListener();
+    };
+  }, [base]);
 
   const change = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -116,10 +266,10 @@ export default function Page() {
     setTimeout(() => setShowStored(false), 3000);
   };
 
-  const queueForm = (f: FormState) => {
-    const q = readQueue();
+  const queueForm = async (f: FormState) => {
+    const q = await readQueueAsync();
     q.push(f);
-    writeQueue(q);
+    await writeQueueAsync(q);
     setQueuedCount(q.length);
     showStoredPopup();
     console.log('queued offline', f);
@@ -131,16 +281,16 @@ export default function Page() {
     setLoading(true);
     try {
       if (typeof window !== 'undefined' && !navigator.onLine) {
-        queueForm(form);
+        await queueForm(form);
         setForm({ name: '', email: '', message: '' });
         return;
       }
       const data = await postForm(base, form);
       console.log('form created', data);
       setForm({ name: '', email: '', message: '' });
-      setQueuedCount(readQueue().length);
+      setQueuedCount((await readQueueAsync()).length);
     } catch (err) {
-      queueForm(form);
+      await queueForm(form);
       setForm({ name: '', email: '', message: '' });
       console.error('submit error — queued', err);
     } finally {
