@@ -1,0 +1,1 @@
+// This file defines custom types and interfaces used throughout the application.
