@@ -1,5 +1,8 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
+import Map from '../components/Map';
+
+
 // Lazy-load Capacitor plugins at runtime so web builds don't fail when packages are not installed.
 let _capModules: any | null = null;
 async function loadCapacitorModules() {
@@ -28,7 +31,8 @@ async function loadCapacitorModules() {
   }
 }
 
-type FormState = { name: string; email: string; message: string };
+type FormState = { name: string; email: string; message: string; latitude?: number; longitude?: number };
+type Coord = { latitude: number; longitude: number };
 const QUEUE_KEY = 'offline_forms_queue';
 
 async function postForm(base: string, form: FormState) {
@@ -152,67 +156,21 @@ async function isOnline(): Promise<boolean> {
 
 export default function Page() {
   const [form, setForm] = useState<FormState>({ name: '', email: '', message: '' });
+  const [selectedCoord, setSelectedCoord] = useState<Coord | null>(null);
   const [loading, setLoading] = useState(false);
+  const [mapResetKey, setMapResetKey] = useState(0);
   const [showStored, setShowStored] = useState(false);
   const [showOnline, setShowOnline] = useState(false);
   const [queuedCount, setQueuedCount] = useState<number>(0);
   const base = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
   const initialOnlineRef = useRef(true);
 
+  // Ensure any previously-selected coordinate is cleared on page load
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    setSelectedCoord(null);
+  }, []);
 
-    let removeListener: (() => void) | undefined;
-
-    const handleOnline = async () => {
-      try {
-        await flushQueue(base);
-        setQueuedCount((await readQueueAsync()).length);
-        if (!initialOnlineRef.current) {
-          setShowOnline(true);
-          setTimeout(() => setShowOnline(false), 3000);
-        }
-      } catch (e) {
-        console.error("flush error", e);
-      }
-      initialOnlineRef.current = false;
-    };
-
-    // init listener using Capacitor Network if available, otherwise fallback to window
-    (async () => {
-      try {
-        const mod = await loadCapacitorModules();
-        if (mod && mod.Network && typeof mod.Network.addListener === 'function') {
-          const listener = await mod.Network.addListener("networkStatusChange", (status: any) => {
-            if (status.connected) handleOnline();
-          });
-          removeListener = () => listener.remove();
-
-          // initial check using plugin
-          const status = await mod.Network.getStatus();
-          if (status.connected) {
-            // flush silently on mount
-            handleOnline();
-          } else {
-            initialOnlineRef.current = false;
-          }
-          return;
-        }
-      } catch (e) {
-        // fallthrough to fallback
-      }
-
-      // Fallback if Network plugin not available
-      window.addEventListener("online", handleOnline);
-      removeListener = () => window.removeEventListener("online", handleOnline);
-      if (navigator.onLine) handleOnline();
-      else initialOnlineRef.current = false;
-    })();
-
-    return () => {
-      if (removeListener) removeListener();
-    };
-  }, [base]);
+  // map lifecycle handled inside Map component
 
   // set initial queued count on mount
   useEffect(() => {
@@ -281,16 +239,24 @@ export default function Page() {
     setLoading(true);
     try {
       if (typeof window !== 'undefined' && !navigator.onLine) {
-        await queueForm(form);
+        await queueForm({ ...form, latitude: selectedCoord?.latitude, longitude: selectedCoord?.longitude });
         setForm({ name: '', email: '', message: '' });
         return;
       }
-      const data = await postForm(base, form);
+      const payload: FormState = { ...form };
+      if (selectedCoord) {
+        payload.latitude = selectedCoord.latitude;
+        payload.longitude = selectedCoord.longitude;
+      }
+      const data = await postForm(base, payload);
       console.log('form created', data);
       setForm({ name: '', email: '', message: '' });
+      setSelectedCoord(null);
+      // trigger map to clear selection and refresh saved markers
+      setMapResetKey((k) => k + 1);
       setQueuedCount((await readQueueAsync()).length);
     } catch (err) {
-      await queueForm(form);
+      await queueForm({ ...form, latitude: selectedCoord?.latitude, longitude: selectedCoord?.longitude });
       setForm({ name: '', email: '', message: '' });
       console.error('submit error — queued', err);
     } finally {
@@ -324,6 +290,9 @@ export default function Page() {
         <input name="name" value={form.name} onChange={change} placeholder="Name" style={{ padding: 10, fontSize: 16, border: '1px solid #333', borderRadius: 6, color: '#111' }} />
         <input name="email" value={form.email} onChange={change} placeholder="Email" style={{ padding: 10, fontSize: 16, border: '1px solid #333', borderRadius: 6, color: '#111' }} />
         <textarea name="message" value={form.message} onChange={change} rows={6} placeholder="Message" style={{ padding: 10, fontSize: 16, border: '1px solid #333', borderRadius: 6, color: '#111' }} />
+
+        <Map onSelect={(c) => setSelectedCoord(c)} resetKey={mapResetKey} />
+
         <button type="submit" disabled={loading} style={{ padding: 10, fontSize: 16, border: 'none', borderRadius: 6, cursor: 'pointer', background: '#000', color: '#fff' }}>
           {loading ? 'Submitting...' : 'Submit'}
         </button>

@@ -3,13 +3,17 @@ import prisma from '../utils/prisma';
 
 export const createForm = async (req: Request, res: Response) => {
   try {
-    const { name, email, message } = req.body;
+    const { name, email, message, latitude, longitude } = req.body;
     if (!name || !email || !message) {
       return res.status(400).json({ error: 'name, email and message are required' });
     }
 
+    const data: any = { name, email, message };
+    if (typeof latitude === 'number') data.latitude = latitude;
+    if (typeof longitude === 'number') data.longitude = longitude;
+
     const created = await prisma.form.create({
-      data: { name, email, message },
+      data,
     });
 
     console.log('Form submitted:', created.id);
@@ -17,5 +21,17 @@ export const createForm = async (req: Request, res: Response) => {
   } catch (err) {
     console.error('Error creating form', err);
     return res.status(500).json({ error: 'Unable to create form' });
+  }
+};
+
+export const getForms = async (_req: Request, res: Response) => {
+  try {
+    const forms = await prisma.form.findMany({
+      select: { id: true, name: true, message: true, latitude: true, longitude: true, createdAt: true },
+    });
+    return res.json(forms);
+  } catch (err) {
+    console.error('Error fetching forms', err);
+    return res.status(500).json({ error: 'Unable to fetch forms' });
   }
 };

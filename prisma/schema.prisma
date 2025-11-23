@@ -12,5 +12,7 @@ model Form {
   name      String
   email     String
   message   String
+  latitude  Float?
+  longitude Float?
   createdAt DateTime @default(now())
 }
