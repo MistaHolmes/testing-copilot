@@ -27,8 +27,9 @@ export default function Hotmap() {
   const [center, setCenter] = useState<[number, number] | null>([20.5937, 78.9629]); // default India
   const [zoom, setZoom] = useState<number>(5);
   const [mapReady, setMapReady] = useState<boolean>(false);
-  const [saved, setSaved] = useState<Array<{ id: number; latitude?: number; longitude?: number; name?: string; message?: string }>>([]);
-  const [selected, setSelected] = useState<{ latitude: number; longitude: number } | null>(null);
+  type SavedEntry = { id: number; latitude: number; longitude: number; name?: string; message?: string; createdAt?: string };
+  const [saved, setSaved] = useState<SavedEntry[]>([]);
+  const [selectedEntry, setSelectedEntry] = useState<SavedEntry | null>(null);
   const [isOpen, setIsOpen] = useState<boolean>(false); // modal open state
 
   useEffect(() => {
@@ -59,9 +60,14 @@ export default function Hotmap() {
     // fetch saved form locations (only entries with coordinates) from localhost:3000
     (async () => {
       try {
+        console.log('[Hotmap] fetching locations from http://localhost:3000/forms/getLocation');
         const res = await fetch('http://localhost:3000/forms/getLocation');
-        if (!res.ok) return;
+        if (!res.ok) {
+          console.warn('[Hotmap] fetch returned non-ok status', res.status);
+          return;
+        }
         const data = await res.json();
+        console.log('[Hotmap] fetched locations count =', Array.isArray(data) ? data.length : 'non-array');
         setSaved(data);
       } catch (e) {
         console.error('fetch saved coords error', e);
@@ -101,8 +107,8 @@ export default function Hotmap() {
   // close when clicking overlay
   const closeModal = () => setIsOpen(false);
 
-  // preview size and modal size
-  const previewStyle: React.CSSProperties = { width: 320, height: 200, border: '1px solid #ddd', borderRadius: 8, overflow: 'hidden', cursor: mapReady ? 'pointer' : 'default' };
+  // preview style: match main Map component (full width, 300px height)
+  const previewStyle: React.CSSProperties = { width: '100%', height: 300, border: '1px solid #ddd', borderRadius: 8, overflow: 'hidden', position: 'relative' };
 
   return (
     <>
@@ -116,16 +122,16 @@ export default function Hotmap() {
       {/* Preview box when mapReady */}
       {mapReady && !isOpen && (
         <div style={{ marginTop: 16 }}>
-          <div style={previewStyle} onClick={openModal}>
-            <MapContainer key="hotmap-preview" center={center ?? [20.5937, 78.9629]} zoom={zoom} style={{ height: '100%', width: '100%' }}>
+          <div style={previewStyle}>
+            <MapContainer key="hotmap-preview" center={center ?? [20.5937, 78.9629]} zoom={zoom} style={{ height: '100%', width: '100%', pointerEvents: 'none' }}>
               <GoogleTileLayer url={`https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&key=${googleMapsKey}`} attribution='&copy; <a href="https://www.google.com/maps">Google Maps</a>' maxZoom={20} />
               <LocateMarker center={center} />
               {saved.map((s) => (
                 <Marker key={`p-${s.id}`} position={[s.latitude as number, s.longitude as number]} />
               ))}
             </MapContainer>
-            {/* overlay to prevent interaction and capture click */}
-            <div style={{ position: 'relative', top: -200, height: 200 }} onClick={openModal} />
+            {/* clickable overlay to open modal */}
+            <div onClick={openModal} style={{ position: 'absolute', inset: 0, cursor: mapReady ? 'pointer' : 'default' }} />
           </div>
         </div>
       )}
@@ -161,19 +167,24 @@ export default function Hotmap() {
                     position={[s.latitude as number, s.longitude as number]}
                     eventHandlers={{
                       click: () => {
-                        setSelected({ latitude: s.latitude as number, longitude: s.longitude as number });
+                        console.log('[Hotmap] marker clicked', s);
+                        setSelectedEntry(s);
                         setCenter([s.latitude as number, s.longitude as number]);
                         setZoom(13);
                       },
                     }}
-                  />
-                ))}
-
-                {selected && (
-                  <Marker position={[selected.latitude, selected.longitude]}>
-                    <Popup>Selected location</Popup>
+                  >
+                    <Popup>
+                      <div style={{ minWidth: 220 }}>
+                        <div style={{ fontWeight: 700, marginBottom: 6 }}>{s.name ?? 'Anonymous'}</div>
+                        <div style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>{s.message ?? ''}</div>
+                        {s.createdAt && (
+                          <div style={{ fontSize: 12, color: '#666' }}>{new Date(s.createdAt).toLocaleString()}</div>
+                        )}
+                      </div>
+                    </Popup>
                   </Marker>
-                )}
+                ))}
               </MapContainer>
             </div>
           </div>

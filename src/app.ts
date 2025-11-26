@@ -1,6 +1,7 @@
 import express from 'express';
 import healthRouter from './routes/health';
 import formRouter from './routes/form';
+import { getLocation } from './controllers/formController';
 import { errorHandler } from './middlewares/errorHandler';
 import rateLimit from 'express-rate-limit';
 import cors from 'cors';
@@ -24,6 +25,9 @@ const formLimiter = rateLimit({
 // Routes
 app.use('/health', healthRouter);
 app.use('/forms', formRouter);
+
+// Also expose a root-level route for locations: GET /getLocation
+app.get('/getLocation', getLocation);
 
 // Error handler (last)
 app.use(errorHandler);

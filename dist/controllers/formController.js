@@ -42,8 +42,9 @@ const getForms = async (_req, res) => {
 };
 exports.getForms = getForms;
 // GET /forms/getLocation -> return only records that have valid coordinates
-const getLocation = async (_req, res) => {
+const getLocation = async (req, res) => {
     try {
+        console.log(`[GET /getLocation] request from ${req.ip} at ${new Date().toISOString()}`);
         const rows = await prisma_1.default.form.findMany({
             where: {
                 latitude: { not: null },
@@ -51,6 +52,7 @@ const getLocation = async (_req, res) => {
             },
             select: { id: true, latitude: true, longitude: true, name: true, message: true, createdAt: true },
         });
+        console.log(`[GET /getLocation] returning ${rows.length} rows`);
         return res.json(rows);
     }
     catch (err) {

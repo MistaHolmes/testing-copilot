@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const health_1 = __importDefault(require("./routes/health"));
 const form_1 = __importDefault(require("./routes/form"));
+const formController_1 = require("./controllers/formController");
 const errorHandler_1 = require("./middlewares/errorHandler");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const cors_1 = __importDefault(require("cors"));
@@ -24,6 +25,8 @@ const formLimiter = (0, express_rate_limit_1.default)({
 // Routes
 app.use('/health', health_1.default);
 app.use('/forms', form_1.default);
+// Also expose a root-level route for locations: GET /getLocation
+app.get('/getLocation', formController_1.getLocation);
 // Error handler (last)
 app.use(errorHandler_1.errorHandler);
 exports.default = app;
