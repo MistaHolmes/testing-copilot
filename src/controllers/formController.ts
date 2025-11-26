@@ -35,3 +35,20 @@ export const getForms = async (_req: Request, res: Response) => {
     return res.status(500).json({ error: 'Unable to fetch forms' });
   }
 };
+
+// GET /forms/getLocation -> return only records that have valid coordinates
+export const getLocation = async (_req: Request, res: Response) => {
+  try {
+    const rows = await prisma.form.findMany({
+      where: {
+        latitude: { not: null },
+        longitude: { not: null },
+      },
+      select: { id: true, latitude: true, longitude: true, name: true, message: true, createdAt: true },
+    });
+    return res.json(rows);
+  } catch (err) {
+    console.error('Error fetching locations', err);
+    return res.status(500).json({ error: 'Unable to fetch locations' });
+  }
+};

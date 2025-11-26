@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getForms = exports.createForm = void 0;
+exports.getLocation = exports.getForms = exports.createForm = void 0;
 const prisma_1 = __importDefault(require("../utils/prisma"));
 const createForm = async (req, res) => {
     try {
@@ -41,3 +41,21 @@ const getForms = async (_req, res) => {
     }
 };
 exports.getForms = getForms;
+// GET /forms/getLocation -> return only records that have valid coordinates
+const getLocation = async (_req, res) => {
+    try {
+        const rows = await prisma_1.default.form.findMany({
+            where: {
+                latitude: { not: null },
+                longitude: { not: null },
+            },
+            select: { id: true, latitude: true, longitude: true, name: true, message: true, createdAt: true },
+        });
+        return res.json(rows);
+    }
+    catch (err) {
+        console.error('Error fetching locations', err);
+        return res.status(500).json({ error: 'Unable to fetch locations' });
+    }
+};
+exports.getLocation = getLocation;

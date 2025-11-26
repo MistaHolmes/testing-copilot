@@ -1,35 +1,8 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
-import Map from '../components/Map';
-
-
-// Lazy-load Capacitor plugins at runtime so web builds don't fail when packages are not installed.
-let _capModules: any | null = null;
-async function loadCapacitorModules() {
-  if (_capModules !== null) return _capModules;
-  try {
-    // Dynamic imports — may not be present in web-only environments.
-    // @ts-ignore: allow optional import of Capacitor packages
-    const core = await import('@capacitor/core');
-    // @ts-ignore
-    const storage = await import('@capacitor/storage');
-    // @ts-ignore
-    const network = await import('@capacitor/network');
-    // @ts-ignore
-    const app = await import('@capacitor/app');
-    _capModules = {
-      Capacitor: core?.Capacitor ?? core,
-      Storage: storage?.Storage ?? storage,
-      Network: network?.Network ?? network,
-      App: app?.App ?? app,
-    };
-    return _capModules;
-  } catch (e) {
-    // Capacitor packages not available — run in web-only mode using fallbacks.
-    _capModules = null;
-    return null;
-  }
-}
+import dynamic from 'next/dynamic';
+const Map = dynamic(() => import('../components/Map'), { ssr: false });
+const Hotmap = dynamic(() => import('../components/Hotmap'), { ssr: false });
 
 type FormState = { name: string; email: string; message: string; latitude?: number; longitude?: number };
 type Coord = { latitude: number; longitude: number };
@@ -71,26 +44,12 @@ const isNative = () => {
 };
 
 async function isNativeAsync(): Promise<boolean> {
-  try {
-    const mod = await loadCapacitorModules();
-    if (!mod || !mod.Capacitor) return false;
-    const p = mod.Capacitor.getPlatform();
-    return p === 'ios' || p === 'android';
-  } catch {
-    return false;
-  }
+  // We're building for web; treat as not native
+  return false;
 }
 
 async function readQueueAsync(): Promise<FormState[]> {
   try {
-    if (await isNativeAsync()) {
-      const mod = await loadCapacitorModules();
-      if (mod && mod.Storage) {
-        const r = await mod.Storage.get({ key: QUEUE_KEY });
-        if (!r?.value) return [];
-        return JSON.parse(r.value) as FormState[];
-      }
-    }
     const raw = typeof window !== "undefined" ? localStorage.getItem(QUEUE_KEY) : null;
     if (!raw) return [];
     return JSON.parse(raw) as FormState[];
@@ -102,13 +61,6 @@ async function readQueueAsync(): Promise<FormState[]> {
 async function writeQueueAsync(q: FormState[]) {
   const s = JSON.stringify(q);
   try {
-    if (await isNativeAsync()) {
-      const mod = await loadCapacitorModules();
-      if (mod && mod.Storage) {
-        await mod.Storage.set({ key: QUEUE_KEY, value: s });
-        return;
-      }
-    }
     if (typeof window !== "undefined") localStorage.setItem(QUEUE_KEY, s);
   } catch (e) {
     console.error('writeQueueAsync error', e);
@@ -142,15 +94,6 @@ async function flushQueue(base: string) {
 
 // Runtime online check using Capacitor Network plugin with navigator fallback
 async function isOnline(): Promise<boolean> {
-  try {
-    const mod = await loadCapacitorModules();
-    if (mod && mod.Network && typeof mod.Network.getStatus === 'function') {
-      const status = await mod.Network.getStatus();
-      return !!status.connected;
-    }
-  } catch (e) {
-    // ignore and fallback
-  }
   return typeof window !== 'undefined' ? !!navigator.onLine : false;
 }
 
@@ -186,34 +129,25 @@ export default function Page() {
     return () => { mounted = false; };
   }, []);
 
-  // Flush queue when app comes to foreground (native App resume)
+  // No native App resume handling on web; flush queue when browser goes online instead
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    let removeAppListener: (() => void) | undefined;
-    (async () => {
+    if (typeof window === 'undefined') return;
+    const handleOnline = async () => {
       try {
-        const mod = await loadCapacitorModules();
-        if (mod && mod.App && typeof mod.App.addListener === 'function') {
-          const listener = mod.App.addListener("appStateChange", async (state: any) => {
-            if (state.isActive) {
-              try {
-                await flushQueue(base);
-                setQueuedCount((await readQueueAsync()).length);
-              } catch (e) {
-                console.error("flush on resume error", e);
-              }
-            }
-          });
-          removeAppListener = () => listener.remove();
+        await flushQueue(base);
+        setQueuedCount((await readQueueAsync()).length);
+        if (!initialOnlineRef.current) {
+          setShowOnline(true);
+          setTimeout(() => setShowOnline(false), 3000);
         }
       } catch (e) {
-        // App plugin not available — ignore
+        console.error('flush error', e);
       }
-    })();
-
-    return () => {
-      if (removeAppListener) removeAppListener();
+      initialOnlineRef.current = false;
     };
+    window.addEventListener('online', handleOnline);
+    if (navigator.onLine) handleOnline();
+    return () => window.removeEventListener('online', handleOnline);
   }, [base]);
 
   const change = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -292,6 +226,9 @@ export default function Page() {
         <textarea name="message" value={form.message} onChange={change} rows={6} placeholder="Message" style={{ padding: 10, fontSize: 16, border: '1px solid #333', borderRadius: 6, color: '#111' }} />
 
         <Map onSelect={(c) => setSelectedCoord(c)} resetKey={mapResetKey} />
+
+        {/* Hotmap: shows user location and previously-registered complaints */}
+        <Hotmap />
 
         <button type="submit" disabled={loading} style={{ padding: 10, fontSize: 16, border: 'none', borderRadius: 6, cursor: 'pointer', background: '#000', color: '#fff' }}>
           {loading ? 'Submitting...' : 'Submit'}
